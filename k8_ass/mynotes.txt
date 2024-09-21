@@ -1,0 +1,23 @@
+1 to export k8 config
+~ aws eks --region us-east-1 update-kubeconfig --name demo
+
+2 To check connection to EKS cluster run the following command:
+~ kubectl get svc (the external ip here is empty)
+
+3 Create both deployment and the service objects. 
+kubectl apply -f k8s/deployment.yaml (for nginx deployment)
+kubectl apply -f k8s/public-lb.yaml (for public load balancer deployment)
+
+to see if nginx is running
+kubectl get pods 
+
+public loadbalancer now is connect to an external ip, exposing port 80 
+while kubernets cluster exposes port 443
+kubectl get svc
+
+5 checking the loadbalancer in the aws console
+you will find out this features
+ - scheme : internet facing (this indicate that it is a public loadbalancer)
+
+ Public loadbalaner : internet facing
+ Private loadbalancer: internal 

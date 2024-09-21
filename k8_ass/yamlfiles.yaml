@@ -1,0 +1,175 @@
+# aws-test.yaml
+
+# Next is to create a pod to test IAM roles for service accounts. First, we are going to omit annotations to bind the service account with the role. The way it works, you create a service account and use it in your pod spec. It can be anything, deployment, statefulset, or some jobs.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aws-test
+  namespace: default
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: aws-cli
+  namespace: default
+spec:
+  serviceAccountName: aws-test
+  containers:
+  - name: aws-cli
+  image: amazon/aws-cli
+  command: [ "/bin/bash", "-c", "--" ]
+  args: [ "while true; do sleep 30; done;" ]
+  tolerations:
+  - operator: Exists
+    effect: NoSchedule
+
+
+
+---
+...
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::730335305826:role/test-oidc
+...
+
+
+
+# cluster-autoscaler.yaml
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-autoscaler
+  namespace: kube-saystem
+  annotations:
+   eks.amazonaws.com/role-arn: arn:aws:iam::730335305826:role/eks-cluster-autoscaler
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-autoscaler
+rules:
+- apiGroups: [""]
+  resources: ["events", "endpoints"]
+  verbs: ["create", "patch"]
+- apiGroups: [""]
+  resources: ["pods/eviction"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["nodes/status"]
+  verbs: ["patch"]
+- apiGroups: ["apps"]
+  resources: ["replicasets", "statefulsets"]
+  verbs: ["list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "services", "nodes", "namespaces"]
+  verbs: ["list", "watch"]
+- apiGroups: ["autoscaling.k8s.io"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["create", "get", "list", "update"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-autoscaler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-autoscaler
+subjects:
+- kind: ServiceAccount
+  name: cluster-autoscaler
+  namespace: kube-system
+
+
+#deployment.yam
+# Next, let's deploy the sample application and expose it using public and private load balancers. The first is a deployment object with a base nginx image.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - name: web
+          containerPort: 80
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m
+          limits:
+            memory: 256Mi
+            cpu: 250m
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: role
+                operator: In
+                values:
+                - general
+      # tolerations:
+      # - key: team
+      #   operator: Equal
+      #   value: devops
+      #   effect: NoSchedule
+
+#private-lb.yaml
+# Sometimes if you have a large infrastructure with many different services, you have a requirement to expose the application only within your VPC. For that, you can create a private load balancer. To make it private, you need additional annotation: aws-load-balancer-internal and then provide the CIDR range. 
+# Usually, you use 0.0.0.0/0 to allow any services within your VPC to access it. Give it a name k8s/private-lb.yaml.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: private-lb
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-internal: 0.0.0.0/0
+spec:
+  type: LoadBalancer
+  selector:
+    app: nginx
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: web
+
+
+#public-lb.yaml
+
+# To expose the application to the internet, you can create a Kubernetes service of a type load balancer and use annotations to 
+#configure load balancer properties. By default, Kubernetes will create a load balancer in public subnets, so you don't need to 
+#provide any additional configurations. Also, if you want a new network load balancer instead of the old classic load balancer, you can add aws-load-balancer-type equal to nlb. 
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: public-lb
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+spec:
+  type: LoadBalancer
+  selector:
+    app: nginx
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: web
